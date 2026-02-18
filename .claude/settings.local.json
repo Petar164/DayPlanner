@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run dev:*)",
+      "Bash(node -e:*)",
+      "Bash(node_modules/.bin/electron:*)",
+      "Bash(node_modules/.bin/electron -e \"const e=require\\(''electron''\\); console.log\\(Object.keys\\(e\\).join\\('',''\\)\\)\")",
+      "Bash(npx @electron/rebuild:*)",
+      "Bash(node_modules/electron/dist/electron.exe:*)",
+      "Bash(\"c:\\\\Users\\\\Petar\\\\Desktop\\\\Planner_DesktopApp\\\\node_modules\\\\electron\\\\dist\\\\electron.exe\" \"c:\\\\Users\\\\Petar\\\\Desktop\\\\Planner_DesktopApp\\\\test-electron.js\")",
+      "Bash(npm ls:*)",
+      "Bash(\"c:\\\\Users\\\\Petar\\\\Desktop\\\\Planner_DesktopApp\\\\node_modules\\\\electron\\\\dist\\\\electron.exe\" \"c:\\\\Users\\\\Petar\\\\Desktop\\\\Planner_DesktopApp\\\\test-electron2.js\")",
+      "Bash(timeout 8 npx electron:*)",
+      "Bash(timeout 12 npx electron-vite dev:*)",
+      "Bash(timeout 15 npx electron-vite build:*)"
+    ]
+  }
+}

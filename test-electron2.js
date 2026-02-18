@@ -1,0 +1,1 @@
+const { app } = require("electron"); console.log("app type:", typeof app); if(app) { app.whenReady().then(() => { console.log("ready"); process.exit(0); }); } else { console.log("app is undefined"); process.exit(1); }
