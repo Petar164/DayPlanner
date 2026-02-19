@@ -38,8 +38,21 @@ Before building installer, place embedded assets in [ai/README.md](ai/README.md)
 - `ai/planner-model.gguf`
 
 On first app launch, bundled assets are copied to user data and started automatically.
+If assets in the installer are updated in a newer app build, they are re-copied to user data automatically.
 
 If embedded assets are missing, the app falls back to Ollama.
+
+### Embedded AI environment options
+Configure these in `.env` when needed:
+
+- `EMBEDDED_AI_ENABLED=true|false` (default `true`)
+- `EMBEDDED_AI_HOST` (default `127.0.0.1`)
+- `EMBEDDED_AI_PORT` (default `11435`)
+- `EMBEDDED_AI_STARTUP_TIMEOUT_MS` (default `15000`)
+- `EMBEDDED_RUNTIME_FILE` (default `llama-server.exe`)
+- `EMBEDDED_MODEL_FILE` (default `planner-model.gguf`)
+
+Set `EMBEDDED_AI_ENABLED=false` to force Ollama-only mode.
 
 ## Web Search (Optional)
 Free option (default): DuckDuckGo Instant Answer API (no key required)

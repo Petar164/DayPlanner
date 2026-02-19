@@ -3,8 +3,18 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 
+const parseBoolean = (value: string | undefined, defaultValue: boolean): boolean => {
+  if (!value) return defaultValue
+  const normalized = value.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return defaultValue
+}
+
+const EMBEDDED_ENABLED = parseBoolean(process.env.EMBEDDED_AI_ENABLED, true)
 const EMBEDDED_PORT = Number(process.env.EMBEDDED_AI_PORT ?? 11435)
 const EMBEDDED_HOST = process.env.EMBEDDED_AI_HOST ?? '127.0.0.1'
+const STARTUP_TIMEOUT_MS = Number(process.env.EMBEDDED_AI_STARTUP_TIMEOUT_MS ?? 15000)
 const HEALTH_URL = `http://${EMBEDDED_HOST}:${EMBEDDED_PORT}/health`
 const CHAT_URL = `http://${EMBEDDED_HOST}:${EMBEDDED_PORT}/v1/chat/completions`
 
@@ -27,8 +37,35 @@ const localRuntimePath = (): string => path.join(writableAiDir(), RUNTIME_FILE_N
 
 let runtimeProcess: ChildProcessWithoutNullStreams | null = null
 let runtimeStarted = false
+let lastRuntimeError: string | undefined
+
+const copyIfDifferent = (sourcePath: string, targetPath: string): void => {
+  const sourceStat = fs.statSync(sourcePath)
+  const targetExists = fs.existsSync(targetPath)
+
+  if (!targetExists) {
+    fs.copyFileSync(sourcePath, targetPath)
+    return
+  }
+
+  const targetStat = fs.statSync(targetPath)
+  const sameSize = sourceStat.size === targetStat.size
+  const sourceMtime = Math.floor(sourceStat.mtimeMs)
+  const targetMtime = Math.floor(targetStat.mtimeMs)
+
+  if (!sameSize || sourceMtime !== targetMtime) {
+    fs.copyFileSync(sourcePath, targetPath)
+  }
+}
 
 const ensureBundledAssetsCopied = (): { ok: boolean; reason?: string } => {
+  if (!EMBEDDED_ENABLED) {
+    return {
+      ok: false,
+      reason: 'Embedded AI is disabled via EMBEDDED_AI_ENABLED.'
+    }
+  }
+
   const sourceModel = bundledModelPath()
   const sourceRuntime = bundledRuntimePath()
 
@@ -45,8 +82,8 @@ const ensureBundledAssetsCopied = (): { ok: boolean; reason?: string } => {
   const targetModel = localModelPath()
   const targetRuntime = localRuntimePath()
 
-  if (!fs.existsSync(targetModel)) fs.copyFileSync(sourceModel, targetModel)
-  if (!fs.existsSync(targetRuntime)) fs.copyFileSync(sourceRuntime, targetRuntime)
+  copyIfDifferent(sourceModel, targetModel)
+  copyIfDifferent(sourceRuntime, targetRuntime)
 
   return { ok: true }
 }
@@ -73,24 +110,43 @@ export type EmbeddedRuntimeStatus = {
 }
 
 export const getEmbeddedRuntimeStatus = async (): Promise<EmbeddedRuntimeStatus> => {
+  if (!EMBEDDED_ENABLED) {
+    return {
+      enabled: false,
+      reachable: false,
+      running: false,
+      host: EMBEDDED_HOST,
+      port: EMBEDDED_PORT,
+      source: app.isPackaged ? 'packaged' : 'development',
+      modelPath: localModelPath(),
+      runtimePath: localRuntimePath(),
+      error: 'Embedded AI is disabled via EMBEDDED_AI_ENABLED.'
+    }
+  }
+
   const reachable = await isHealthy()
   return {
-    enabled: true,
+    enabled: EMBEDDED_ENABLED,
     reachable,
     running: runtimeProcess !== null,
     host: EMBEDDED_HOST,
     port: EMBEDDED_PORT,
     source: app.isPackaged ? 'packaged' : 'development',
     modelPath: localModelPath(),
-    runtimePath: localRuntimePath()
+    runtimePath: localRuntimePath(),
+    error: lastRuntimeError
   }
 }
 
 export const initEmbeddedRuntime = async (): Promise<EmbeddedRuntimeStatus> => {
+  if (!EMBEDDED_ENABLED) {
+    return getEmbeddedRuntimeStatus()
+  }
+
   const copied = ensureBundledAssetsCopied()
   if (!copied.ok) {
     return {
-      enabled: true,
+      enabled: EMBEDDED_ENABLED,
       reachable: false,
       running: false,
       host: EMBEDDED_HOST,
@@ -104,6 +160,7 @@ export const initEmbeddedRuntime = async (): Promise<EmbeddedRuntimeStatus> => {
 
   if (await isHealthy()) {
     runtimeStarted = true
+    lastRuntimeError = undefined
     return getEmbeddedRuntimeStatus()
   }
 
@@ -113,18 +170,37 @@ export const initEmbeddedRuntime = async (): Promise<EmbeddedRuntimeStatus> => {
 
     runtimeProcess = spawn(runtime, ['-m', model, '--host', EMBEDDED_HOST, '--port', `${EMBEDDED_PORT}`], {
       windowsHide: true,
+      cwd: writableAiDir(),
       stdio: 'pipe'
     })
 
-    runtimeProcess.on('exit', () => {
+    runtimeProcess.stderr.on('data', (chunk: Buffer) => {
+      const message = chunk.toString().trim()
+      if (message.length > 0) {
+        lastRuntimeError = message
+      }
+    })
+
+    runtimeProcess.on('error', (error) => {
+      lastRuntimeError = error.message
+    })
+
+    runtimeProcess.on('exit', (code, signal) => {
       runtimeProcess = null
       runtimeStarted = false
+      if (code !== null && code !== 0) {
+        lastRuntimeError = `Embedded runtime exited with code ${code}.`
+      } else if (signal) {
+        lastRuntimeError = `Embedded runtime exited due to signal ${signal}.`
+      }
     })
   }
 
-  for (let i = 0; i < 20; i += 1) {
+  const startWait = Date.now()
+  while (Date.now() - startWait < STARTUP_TIMEOUT_MS) {
     if (await isHealthy()) {
       runtimeStarted = true
+      lastRuntimeError = undefined
       break
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -171,5 +247,6 @@ export const chatWithEmbeddedRuntime = async (
 }
 
 export const hasEmbeddedAssets = (): boolean => {
+  if (!EMBEDDED_ENABLED) return false
   return fs.existsSync(bundledModelPath()) && fs.existsSync(bundledRuntimePath())
 }
