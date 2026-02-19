@@ -38,6 +38,7 @@ type EditState = { task: Task; isNew: boolean }
 type DragState = {
   taskId: string
   startClientY: number
+  startScrollTop: number
   originalStart: number
   duration: number
   moved: boolean
@@ -46,12 +47,12 @@ type DragState = {
 
 // ─── Constants ────────────────────────────────────────────────────
 const TIMELINE_START = 6   // 6 AM
-const TIMELINE_END   = 23  // 11 PM
+const TIMELINE_END   = 24  // 12 AM next day
 const BASE_PX_PER_MIN = 1
 const DRAG_PX_PER_MIN = 2.2
 const DRAG_VISIBLE_WINDOW_MINS = 120
-const HOUR_HEIGHT    = 60  // pixels per hour
-const HOURS = Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => TIMELINE_START + i)
+const HOUR_MARKS = Array.from({ length: TIMELINE_END - TIMELINE_START + 1 }, (_, i) => TIMELINE_START + i)
+const HALF_HOUR_MARKS = Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => TIMELINE_START + i)
 const QUARTER_MARKS = Array.from(
   { length: (TIMELINE_END - TIMELINE_START) * 4 + 1 },
   (_, i) => TIMELINE_START * 60 + i * 15
@@ -101,11 +102,19 @@ function formatDate(d: Date): { day: string; full: string } {
 }
 
 function minsTo12HourTimeLabel(totalMinutes: number): string {
-  const h24 = Math.floor(totalMinutes / 60)
+  const h24Raw = Math.floor(totalMinutes / 60)
   const mins = totalMinutes % 60
+  const h24 = h24Raw % 24
   const period = h24 >= 12 ? 'PM' : 'AM'
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12
   return `${h12}:${String(mins).padStart(2, '0')} ${period}`
+}
+
+function hourTo12HourLabel(hour24Raw: number): string {
+  const hour24 = hour24Raw % 24
+  const period = hour24 >= 12 ? 'PM' : 'AM'
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12
+  return `${hour12} ${period}`
 }
 
 function toIsoDate(date: Date): string {
@@ -376,6 +385,7 @@ const App = (): JSX.Element => {
   const chatEndRef     = useRef<HTMLDivElement>(null)
   const timelineRef    = useRef<HTMLDivElement>(null)
   const dragStateRef   = useRef<DragState | null>(null)
+  const dragZoomAnchorRef = useRef<{ pointerY: number; previousScrollTop: number } | null>(null)
   const suppressTimelineClickRef = useRef(false)
   const todayIso = useMemo(() => toIsoDate(new Date()), [])
   const minDateIso = useMemo(() => {
@@ -442,19 +452,23 @@ const App = (): JSX.Element => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, aiTyping])
 
-  // ── Keep drag target visible while zoomed ──────────────────────
+  // ── Anchor drag zoom under cursor (no teleport) ─────────────────
   useEffect(() => {
-    if (!draggingTaskId || dragPreviewMins === null || !timelineRef.current) return
-
-    const targetTop = (dragPreviewMins - TIMELINE_START * 60) * effectivePxPerMin
+    if (!draggingTaskId || !timelineRef.current || !dragZoomAnchorRef.current) return
     const wrapper = timelineRef.current
-    const visibleTop = wrapper.scrollTop
-    const visibleBottom = wrapper.scrollTop + wrapper.clientHeight
+    const anchor = dragZoomAnchorRef.current
+    const ratio = DRAG_PX_PER_MIN / BASE_PX_PER_MIN
+    wrapper.scrollTop = Math.max(0, (anchor.previousScrollTop + anchor.pointerY) * ratio - anchor.pointerY)
 
-    if (targetTop < visibleTop + 90 || targetTop > visibleBottom - 90) {
-      wrapper.scrollTo({ top: Math.max(0, targetTop - wrapper.clientHeight / 2), behavior: 'smooth' })
+    // Rebase drag scroll baseline after zoom anchoring so cursor locking and edge auto-scroll
+    // use the same coordinate frame and don't fight each other.
+    if (dragStateRef.current) {
+      dragStateRef.current.startScrollTop = wrapper.scrollTop
+      dragStateRef.current.originalStart = dragStateRef.current.currentStart
     }
-  }, [draggingTaskId, dragPreviewMins, effectivePxPerMin])
+
+    dragZoomAnchorRef.current = null
+  }, [draggingTaskId])
 
   // ── Keyboard shortcuts ─────────────────────────────────────────
   // Escape — close any open modal
@@ -644,9 +658,18 @@ const App = (): JSX.Element => {
     const originalStart = timeToMins(task.startTime)
     const duration = Math.max(15, timeToMins(task.endTime) - originalStart)
 
+    if (timelineRef.current) {
+      const rect = timelineRef.current.getBoundingClientRect()
+      dragZoomAnchorRef.current = {
+        pointerY: e.clientY - rect.top,
+        previousScrollTop: timelineRef.current.scrollTop
+      }
+    }
+
     dragStateRef.current = {
       taskId: task.id,
       startClientY: e.clientY,
+      startScrollTop: timelineRef.current?.scrollTop ?? 0,
       originalStart,
       duration,
       moved: false,
@@ -663,7 +686,12 @@ const App = (): JSX.Element => {
       const drag = dragStateRef.current
       if (!drag || drag.taskId !== task.id) return
 
-      const deltaMinutesRaw = (latestClientY - drag.startClientY) / DRAG_PX_PER_MIN
+      const timeline = timelineRef.current
+      const scrollDeltaMins = timeline
+        ? (timeline.scrollTop - drag.startScrollTop) / DRAG_PX_PER_MIN
+        : 0
+
+      const deltaMinutesRaw = (latestClientY - drag.startClientY) / DRAG_PX_PER_MIN + scrollDeltaMins
       drag.moved = drag.moved || Math.abs(latestClientY - drag.startClientY) > 3
 
       const minStart = TIMELINE_START * 60
@@ -688,6 +716,32 @@ const App = (): JSX.Element => {
         })
         return changed ? updated : prev
       })
+
+      // Auto-scroll when dragging near top/bottom edges so tasks can move across the day.
+      if (timeline) {
+        const rect = timeline.getBoundingClientRect()
+        const pointerY = latestClientY - rect.top
+        const edgeZone = 78
+        const maxStep = 18
+        let deltaScroll = 0
+
+        if (pointerY < edgeZone) {
+          const intensity = (edgeZone - pointerY) / edgeZone
+          deltaScroll = -Math.max(4, Math.round(maxStep * intensity))
+        } else if (pointerY > rect.height - edgeZone) {
+          const intensity = (pointerY - (rect.height - edgeZone)) / edgeZone
+          deltaScroll = Math.max(4, Math.round(maxStep * intensity))
+        }
+
+        if (deltaScroll !== 0) {
+          const next = Math.max(0, Math.min(timeline.scrollHeight - timeline.clientHeight, timeline.scrollTop + deltaScroll))
+          if (next !== timeline.scrollTop) {
+            timeline.scrollTop = next
+            frameRequested = true
+            window.requestAnimationFrame(applyDragFrame)
+          }
+        }
+      }
     }
 
     const onMouseMove = (moveEvent: MouseEvent): void => {
@@ -703,6 +757,7 @@ const App = (): JSX.Element => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
       dragStateRef.current = null
+      dragZoomAnchorRef.current = null
       setDraggingTaskId(null)
       setDragPreviewMins(null)
 
@@ -996,13 +1051,13 @@ const App = (): JSX.Element => {
 
               {/* Hour labels */}
               <div className="timeline-labels" style={{ height: totalHeight }}>
-                {!draggingTaskId && HOURS.map((h) => (
+                {!draggingTaskId && HOUR_MARKS.map((h) => (
                   <div
                     key={h}
                     className="timeline-hour-label"
                     style={{ top: (h - TIMELINE_START) * effectiveHourHeight }}
                   >
-                    {h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`}
+                    {hourTo12HourLabel(h)}
                   </div>
                 ))}
 
@@ -1033,12 +1088,17 @@ const App = (): JSX.Element => {
                 onClick={handleTimelineClick}
               >
                 {/* Hour lines */}
-                {HOURS.map((h) => (
+                {HOUR_MARKS.map((h) => (
                   <React.Fragment key={h}>
                     <div
                       className="hour-line"
                       style={{ top: (h - TIMELINE_START) * effectiveHourHeight }}
                     />
+                  </React.Fragment>
+                ))}
+
+                {HALF_HOUR_MARKS.map((h) => (
+                  <React.Fragment key={`half-${h}`}>
                     <div
                       className="hour-line half"
                       style={{ top: (h - TIMELINE_START) * effectiveHourHeight + 30 * effectivePxPerMin }}
