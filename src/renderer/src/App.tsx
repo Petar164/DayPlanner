@@ -47,7 +47,9 @@ type DragState = {
 // ─── Constants ────────────────────────────────────────────────────
 const TIMELINE_START = 6   // 6 AM
 const TIMELINE_END   = 23  // 11 PM
-const PX_PER_MIN     = 1   // 1 pixel per minute
+const BASE_PX_PER_MIN = 1
+const DRAG_PX_PER_MIN = 2.2
+const DRAG_VISIBLE_WINDOW_MINS = 120
 const HOUR_HEIGHT    = 60  // pixels per hour
 const HOURS = Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => TIMELINE_START + i)
 const QUARTER_MARKS = Array.from(
@@ -67,20 +69,20 @@ function minsToTime(m: number): string {
   return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
 }
 
-function taskTop(task: Task): number {
+function taskTop(task: Task, pxPerMin: number): number {
   const start = Math.max(timeToMins(task.startTime), TIMELINE_START * 60)
-  return (start - TIMELINE_START * 60) * PX_PER_MIN
+  return (start - TIMELINE_START * 60) * pxPerMin
 }
 
-function taskHeight(task: Task): number {
+function taskHeight(task: Task, pxPerMin: number): number {
   const start = Math.max(timeToMins(task.startTime), TIMELINE_START * 60)
   const end   = Math.min(timeToMins(task.endTime),   TIMELINE_END   * 60)
-  return Math.max((end - start) * PX_PER_MIN, 26)
+  return Math.max((end - start) * pxPerMin, 26)
 }
 
-function getNowTop(): number {
+function getNowTop(pxPerMin: number): number {
   const now = new Date()
-  return (now.getHours() * 60 + now.getMinutes() - TIMELINE_START * 60) * PX_PER_MIN
+  return (now.getHours() * 60 + now.getMinutes() - TIMELINE_START * 60) * pxPerMin
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -369,7 +371,7 @@ const App = (): JSX.Element => {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null)
   const [dragPreviewMins, setDragPreviewMins] = useState<number | null>(null)
 
-  const [nowTop, setNowTop] = useState(getNowTop())
+  const [nowTop, setNowTop] = useState(getNowTop(BASE_PX_PER_MIN))
 
   const chatEndRef     = useRef<HTMLDivElement>(null)
   const timelineRef    = useRef<HTMLDivElement>(null)
@@ -382,7 +384,9 @@ const App = (): JSX.Element => {
     return toIsoDate(d)
   }, [])
   const dateLabel = useMemo(() => formatDate(fromIsoDate(selectedDate)), [selectedDate])
-  const totalHeight = (TIMELINE_END - TIMELINE_START) * HOUR_HEIGHT
+  const effectivePxPerMin = draggingTaskId ? DRAG_PX_PER_MIN : BASE_PX_PER_MIN
+  const effectiveHourHeight = 60 * effectivePxPerMin
+  const totalHeight = (TIMELINE_END - TIMELINE_START) * 60 * effectivePxPerMin
 
   // ── Load state ─────────────────────────────────────────────────
   useEffect(() => {
@@ -428,14 +432,29 @@ const App = (): JSX.Element => {
 
   // ── Now-line ticker ────────────────────────────────────────────
   useEffect(() => {
-    const tick = setInterval(() => setNowTop(getNowTop()), 60_000)
+    setNowTop(getNowTop(effectivePxPerMin))
+    const tick = setInterval(() => setNowTop(getNowTop(effectivePxPerMin)), 60_000)
     return () => clearInterval(tick)
-  }, [])
+  }, [effectivePxPerMin])
 
   // ── Scroll chat to bottom ──────────────────────────────────────
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, aiTyping])
+
+  // ── Keep drag target visible while zoomed ──────────────────────
+  useEffect(() => {
+    if (!draggingTaskId || dragPreviewMins === null || !timelineRef.current) return
+
+    const targetTop = (dragPreviewMins - TIMELINE_START * 60) * effectivePxPerMin
+    const wrapper = timelineRef.current
+    const visibleTop = wrapper.scrollTop
+    const visibleBottom = wrapper.scrollTop + wrapper.clientHeight
+
+    if (targetTop < visibleTop + 90 || targetTop > visibleBottom - 90) {
+      wrapper.scrollTo({ top: Math.max(0, targetTop - wrapper.clientHeight / 2), behavior: 'smooth' })
+    }
+  }, [draggingTaskId, dragPreviewMins, effectivePxPerMin])
 
   // ── Keyboard shortcuts ─────────────────────────────────────────
   // Escape — close any open modal
@@ -535,6 +554,38 @@ const App = (): JSX.Element => {
     return { days, startMonth: toIsoDate(first), endMonth: toIsoDate(end) }
   }, [selectedDate])
 
+  const weekRangeLabel = useMemo(() => {
+    const start = fromIsoDate(startOfWeekIso(selectedDate))
+    const end = fromIsoDate(endOfWeekIso(selectedDate))
+    const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const endLabel = end.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    return `${startLabel} - ${endLabel}`
+  }, [selectedDate])
+
+  const monthLabel = useMemo(() => {
+    const current = fromIsoDate(selectedDate)
+    return current.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+  }, [selectedDate])
+
+  const topbarPrimaryLabel = viewMode === 'day'
+    ? dateLabel.day
+    : viewMode === 'week'
+      ? 'Week Overview'
+      : 'Month Overview'
+
+  const topbarSecondaryLabel = viewMode === 'day'
+    ? dateLabel.full
+    : viewMode === 'week'
+      ? weekRangeLabel
+      : monthLabel
+
+  const visibleQuarterMarks = useMemo(() => {
+    if (!draggingTaskId || dragPreviewMins === null) return []
+    return QUARTER_MARKS.filter((mins) =>
+      Math.abs(mins - dragPreviewMins) <= DRAG_VISIBLE_WINDOW_MINS
+    )
+  }, [draggingTaskId, dragPreviewMins])
+
   // ── Tag handlers ───────────────────────────────────────────────
   const handleAddTag = (): void => {
     if (!newTagName.trim()) return
@@ -612,7 +663,7 @@ const App = (): JSX.Element => {
       const drag = dragStateRef.current
       if (!drag || drag.taskId !== task.id) return
 
-      const deltaMinutesRaw = (latestClientY - drag.startClientY) / PX_PER_MIN
+      const deltaMinutesRaw = (latestClientY - drag.startClientY) / DRAG_PX_PER_MIN
       drag.moved = drag.moved || Math.abs(latestClientY - drag.startClientY) > 3
 
       const minStart = TIMELINE_START * 60
@@ -698,7 +749,7 @@ const App = (): JSX.Element => {
 
     const rect = e.currentTarget.getBoundingClientRect()
     const y    = e.clientY - rect.top
-    const rawMins  = y / PX_PER_MIN + TIMELINE_START * 60
+    const rawMins  = y / effectivePxPerMin + TIMELINE_START * 60
     const snapped  = Math.round(rawMins / 15) * 15                          // snap to 15 min
     const clamped  = Math.max(TIMELINE_START * 60, Math.min(TIMELINE_END * 60 - 45, snapped))
     openNewTask(minsToTime(clamped))
@@ -853,8 +904,8 @@ const App = (): JSX.Element => {
         {/* Top bar */}
         <div className="topbar">
           <div className="topbar-date">
-            <div className="topbar-day">{dateLabel.day}</div>
-            <div className="topbar-full">{dateLabel.full}</div>
+            <div className="topbar-day">{topbarPrimaryLabel}</div>
+            <div className="topbar-full">{topbarSecondaryLabel}</div>
           </div>
 
           <div className="date-nav">
@@ -940,26 +991,26 @@ const App = (): JSX.Element => {
         </div>
 
         {viewMode === 'day' && (
-          <div className="timeline-wrapper" ref={timelineRef}>
+          <div className={`timeline-wrapper${draggingTaskId ? ' is-zoomed' : ''}`} ref={timelineRef}>
             <div className="timeline-inner">
 
               {/* Hour labels */}
               <div className="timeline-labels" style={{ height: totalHeight }}>
-                {HOURS.map((h) => (
+                {!draggingTaskId && HOURS.map((h) => (
                   <div
                     key={h}
                     className="timeline-hour-label"
-                    style={{ top: (h - TIMELINE_START) * HOUR_HEIGHT }}
+                    style={{ top: (h - TIMELINE_START) * effectiveHourHeight }}
                   >
                     {h === 12 ? '12 PM' : h < 12 ? `${h} AM` : `${h - 12} PM`}
                   </div>
                 ))}
 
-                {draggingTaskId && QUARTER_MARKS.map((mins) => (
+                {draggingTaskId && visibleQuarterMarks.map((mins) => (
                   <div
                     key={mins}
                     className="timeline-quarter-label"
-                    style={{ top: (mins - TIMELINE_START * 60) * PX_PER_MIN }}
+                    style={{ top: (mins - TIMELINE_START * 60) * effectivePxPerMin }}
                   >
                     {minsTo12HourTimeLabel(mins)}
                   </div>
@@ -968,7 +1019,7 @@ const App = (): JSX.Element => {
                 {draggingTaskId && dragPreviewMins !== null && (
                   <div
                     className="timeline-drag-time"
-                    style={{ top: (dragPreviewMins - TIMELINE_START * 60) * PX_PER_MIN }}
+                    style={{ top: (dragPreviewMins - TIMELINE_START * 60) * effectivePxPerMin }}
                   >
                     {minsTo12HourTimeLabel(dragPreviewMins)}
                   </div>
@@ -986,11 +1037,11 @@ const App = (): JSX.Element => {
                   <React.Fragment key={h}>
                     <div
                       className="hour-line"
-                      style={{ top: (h - TIMELINE_START) * HOUR_HEIGHT }}
+                      style={{ top: (h - TIMELINE_START) * effectiveHourHeight }}
                     />
                     <div
                       className="hour-line half"
-                      style={{ top: (h - TIMELINE_START) * HOUR_HEIGHT + 30 }}
+                      style={{ top: (h - TIMELINE_START) * effectiveHourHeight + 30 * effectivePxPerMin }}
                     />
                   </React.Fragment>
                 ))}
@@ -1016,8 +1067,8 @@ const App = (): JSX.Element => {
                 {dayTimelineTasks.map((task) => {
                   const tag     = tags.find((t) => t.id === task.tagId)
                   const color   = tag?.color ?? '#6c63ff'
-                  const top     = taskTop(task)
-                  const height  = taskHeight(task)
+                  const top     = taskTop(task, effectivePxPerMin)
+                  const height  = taskHeight(task, effectivePxPerMin)
                   const compact = height < 44
                   const colInfo = columns.get(task.id) ?? { col: 0, totalCols: 1 }
                   const pct     = 100 / colInfo.totalCols
@@ -1067,7 +1118,16 @@ const App = (): JSX.Element => {
 
               return (
                 <div key={iso} className="period-column">
-                  <div className="period-column-head">{label}</div>
+                  <button
+                    className="period-column-head"
+                    onClick={() => {
+                      setSelectedDate(iso)
+                      setViewMode('day')
+                    }}
+                    title="Open day view"
+                  >
+                    {label}
+                  </button>
                   <div className="period-column-body">
                     {dayTasks.length === 0 && <div className="period-empty">No tasks</div>}
                     {dayTasks.map((task) => {
@@ -1088,7 +1148,13 @@ const App = (): JSX.Element => {
         )}
 
         {viewMode === 'month' && (
-          <div className="period-grid month-grid">
+          <div className="period-grid month-grid-wrap">
+            <div className="month-weekdays">
+              {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => (
+                <div key={day} className="month-weekday">{day}</div>
+              ))}
+            </div>
+            <div className="month-grid">
             {monthDays.days.map((iso) => {
               const isInMonth = isIsoBetween(iso, monthDays.startMonth, monthDays.endMonth)
               const dayTasks = filteredTasks
@@ -1096,23 +1162,32 @@ const App = (): JSX.Element => {
                 .sort((a, b) => a.startTime.localeCompare(b.startTime))
 
               return (
-                <div key={iso} className={`month-cell${isInMonth ? '' : ' out-of-month'}`}>
+                <button
+                  key={iso}
+                  className={`month-cell${isInMonth ? '' : ' out-of-month'}`}
+                  onClick={() => {
+                    setSelectedDate(iso)
+                    setViewMode('day')
+                  }}
+                  title="Open day view"
+                >
                   <div className="month-cell-day">{fromIsoDate(iso).getDate()}</div>
                   <div className="month-cell-tasks">
                     {dayTasks.slice(0, 3).map((task) => {
                       const tag = tags.find((t) => t.id === task.tagId)
                       return (
-                        <button key={task.id} className="month-task-chip" onClick={() => setEditState({ task, isNew: false })}>
+                        <span key={task.id} className="month-task-chip">
                           <span className="period-task-color" style={{ background: tag?.color ?? '#6c63ff' }} />
                           <span>{task.title}</span>
-                        </button>
+                        </span>
                       )
                     })}
                     {dayTasks.length > 3 && <div className="month-more">+{dayTasks.length - 3} more</div>}
                   </div>
-                </div>
+                </button>
               )
             })}
+            </div>
           </div>
         )}
       </div>
