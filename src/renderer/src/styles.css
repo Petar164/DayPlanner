@@ -168,6 +168,29 @@ body {
 .topbar-date { display: flex; flex-direction: column; }
 .topbar-day  { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; color: var(--text-hi); line-height: 1.1; }
 .topbar-full { font-size: 11.5px; color: var(--text-lo); margin-top: 2px; }
+.date-nav { display: flex; align-items: center; gap: 6px; margin-left: 10px; }
+.view-switch {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--r-full);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  gap: 4px;
+}
+.view-switch-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-mid);
+  border-radius: var(--r-full);
+  font-size: 11.5px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.view-switch-btn.active {
+  background: var(--accent-dim);
+  color: var(--text-hi);
+  border: 1px solid rgba(108, 99, 255, 0.28);
+}
 .topbar-spacer { flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 9px; }
 
@@ -192,10 +215,164 @@ body {
   transform: translateY(-50%); user-select: none; white-space: nowrap;
 }
 
+.timeline-quarter-label {
+  position: absolute;
+  right: 8px;
+  font-size: 9.5px;
+  color: rgba(255, 255, 255, 0.42);
+  transform: translateY(-50%);
+  user-select: none;
+  white-space: nowrap;
+  animation: quarterLabelIn 180ms ease;
+}
+
+.timeline-drag-time {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%) scale(1.02);
+  font-size: 10px;
+  font-weight: 700;
+  color: #ffffff;
+  background: rgba(124, 115, 255, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 999px;
+  padding: 3px 8px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 8px 20px rgba(124, 115, 255, 0.28);
+  z-index: 4;
+  animation: dragTimePulse 320ms ease;
+}
+
 .timeline-grid {
   flex: 1; position: relative;
   border-left: 1px solid var(--border);
   cursor: crosshair;
+}
+
+.period-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 24px 24px;
+}
+
+.week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.period-column {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+}
+
+.period-column-head {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  color: var(--text-mid);
+  font-weight: 600;
+}
+
+.period-column-body {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.period-empty {
+  color: var(--text-lo);
+  font-size: 12px;
+  padding: 8px;
+}
+
+.period-task {
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--r-sm);
+  padding: 7px 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.period-task-title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.period-task-time {
+  font-size: 10.5px;
+  color: var(--text-lo);
+}
+
+.period-task-color {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.month-cell {
+  min-height: 120px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.month-cell.out-of-month {
+  opacity: 0.45;
+}
+
+.month-cell-day {
+  font-size: 12px;
+  color: var(--text-mid);
+}
+
+.month-cell-tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.month-task-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-hi);
+  border-radius: var(--r-sm);
+  padding: 5px 7px;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.month-more {
+  font-size: 10.5px;
+  color: var(--text-lo);
+  padding-left: 2px;
 }
 
 .hour-line {
@@ -236,14 +413,15 @@ body {
   position: absolute;
   border-radius: var(--r-md);
   padding: 7px 11px;
-  cursor: pointer;
+  cursor: grab;
   overflow: hidden;
   display: flex; flex-direction: column; gap: 2px;
-  transition: box-shadow 150ms ease, transform 150ms ease, filter 150ms ease;
+  transition: box-shadow 140ms ease, transform 140ms ease, filter 140ms ease, top 80ms linear, left 120ms ease, width 120ms ease;
   border: 1px solid rgba(255, 255, 255, 0.1);
   min-height: 26px;
   z-index: 1;
   user-select: none;
+  will-change: top, left, transform;
 }
 .task-block::before {
   content: "";
@@ -257,6 +435,13 @@ body {
   transform: translateX(2px) translateY(-1px);
   filter: brightness(1.1);
   z-index: 4;
+}
+.task-block.is-dragging {
+  cursor: grabbing;
+  transition: none;
+  transform: translateX(0) scale(1.01);
+  box-shadow: var(--shadow-lg);
+  z-index: 6;
 }
 .task-block.is-fixed { border-color: rgba(255, 255, 255, 0.14); }
 
@@ -570,4 +755,14 @@ label {
 @keyframes nowPulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.55; }
+}
+
+@keyframes quarterLabelIn {
+  from { opacity: 0; transform: translateY(-50%) translateX(-4px); }
+  to { opacity: 1; transform: translateY(-50%) translateX(0); }
+}
+
+@keyframes dragTimePulse {
+  from { opacity: 0.75; transform: translateY(-50%) scale(0.94); }
+  to { opacity: 1; transform: translateY(-50%) scale(1.02); }
 }
